@@ -23,15 +23,41 @@ class ItemUpdate(BaseModel):
 
 
 # GET - 전체 목록 조회
-# Query 파라미터: /items?available=true&max_price=1000
+# 사용 예시:
+#   /items?available=true
+#   /items?min_price=500&max_price=1000
+#   /items?name=사과
+#   /items?sort=price_asc
+#   /items?skip=0&limit=1
 @app.get("/items", summary="전체 아이템 목록 조회")
-def get_items(available: bool | None = None, max_price: float | None = None):
-    result = items
+def get_items(
+    available: bool | None = None,
+    name: str | None = None,
+    min_price: float | None = None,
+    max_price: float | None = None,
+    sort: str | None = None,
+    skip: int = 0,
+    limit: int = 10,
+):
+    result = dict(items)
+
     if available is not None:
         result = {k: v for k, v in result.items() if v["is_available"] == available}
+    if name is not None:
+        result = {k: v for k, v in result.items() if name in v["name"]}
+    if min_price is not None:
+        result = {k: v for k, v in result.items() if v["price"] >= min_price}
     if max_price is not None:
         result = {k: v for k, v in result.items() if v["price"] <= max_price}
-    return result
+
+    sorted_items = sorted(result.items(), key=lambda x: (
+        x[1]["price"] if sort == "price_asc" else
+        -x[1]["price"] if sort == "price_desc" else
+        x[0]
+    ))
+
+    paginated = sorted_items[skip: skip + limit]
+    return dict(paginated)
 
 
 # GET - 특정 아이템 조회
