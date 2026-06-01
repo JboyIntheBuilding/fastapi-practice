@@ -1,24 +1,9 @@
-from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel
+from fastapi import APIRouter, HTTPException, Depends
+from sqlmodel import Session, select
+from database import get_session
+from models import Item, ItemCreate, ItemUpdate
 
 router = APIRouter(prefix="/items", tags=["Items"])
-
-items: dict = {
-    1: {"name": "사과", "price": 1000, "is_available": True},
-    2: {"name": "바나나", "price": 500, "is_available": True},
-}
-
-
-class Item(BaseModel):
-    name: str
-    price: float
-    is_available: bool = True
-
-
-class ItemUpdate(BaseModel):
-    name: str | None = None
-    price: float | None = None
-    is_available: bool | None = None
 
 
 @router.get("", summary="전체 아이템 목록 조회")
@@ -27,65 +12,68 @@ def get_items(
     name: str | None = None,
     min_price: float | None = None,
     max_price: float | None = None,
-    sort: str | None = None,
     skip: int = 0,
     limit: int = 10,
+    session: Session = Depends(get_session),
 ):
-    result = dict(items)
+    query = select(Item)
 
     if available is not None:
-        result = {k: v for k, v in result.items() if v["is_available"] == available}
+        query = query.where(Item.is_available == available)
     if name is not None:
-        result = {k: v for k, v in result.items() if name in v["name"]}
+        query = query.where(Item.name.contains(name))
     if min_price is not None:
-        result = {k: v for k, v in result.items() if v["price"] >= min_price}
+        query = query.where(Item.price >= min_price)
     if max_price is not None:
-        result = {k: v for k, v in result.items() if v["price"] <= max_price}
+        query = query.where(Item.price <= max_price)
 
-    sorted_items = sorted(result.items(), key=lambda x: (
-        x[1]["price"] if sort == "price_asc" else
-        -x[1]["price"] if sort == "price_desc" else
-        x[0]
-    ))
-
-    return dict(sorted_items[skip: skip + limit])
+    return session.exec(query.offset(skip).limit(limit)).all()
 
 
 @router.get("/{item_id}", summary="특정 아이템 조회")
-def get_item(item_id: int):
-    if item_id not in items:
+def get_item(item_id: int, session: Session = Depends(get_session)):
+    item = session.get(Item, item_id)
+    if not item:
         raise HTTPException(status_code=404, detail="아이템을 찾을 수 없습니다")
-    return items[item_id]
+    return item
 
 
 @router.post("", summary="새 아이템 생성", status_code=201)
-def create_item(item: Item):
-    new_id = max(items.keys()) + 1
-    items[new_id] = item.model_dump()
-    return {"id": new_id, "item": items[new_id]}
+def create_item(item: ItemCreate, session: Session = Depends(get_session)):
+    db_item = Item.model_validate(item)
+    session.add(db_item)
+    session.commit()
+    session.refresh(db_item)
+    return db_item
 
 
 @router.put("/{item_id}", summary="아이템 전체 수정")
-def update_item(item_id: int, item: Item):
-    if item_id not in items:
+def update_item(item_id: int, item: ItemCreate, session: Session = Depends(get_session)):
+    db_item = session.get(Item, item_id)
+    if not db_item:
         raise HTTPException(status_code=404, detail="아이템을 찾을 수 없습니다")
-    items[item_id] = item.model_dump()
-    return {"id": item_id, "item": items[item_id]}
+    db_item.sqlmodel_update(item.model_dump())
+    session.commit()
+    session.refresh(db_item)
+    return db_item
 
 
 @router.patch("/{item_id}", summary="아이템 부분 수정")
-def patch_item(item_id: int, item: ItemUpdate):
-    if item_id not in items:
+def patch_item(item_id: int, item: ItemUpdate, session: Session = Depends(get_session)):
+    db_item = session.get(Item, item_id)
+    if not db_item:
         raise HTTPException(status_code=404, detail="아이템을 찾을 수 없습니다")
-    stored = items[item_id]
-    update_data = item.model_dump(exclude_unset=True)
-    stored.update(update_data)
-    return {"id": item_id, "item": stored}
+    db_item.sqlmodel_update(item.model_dump(exclude_unset=True))
+    session.commit()
+    session.refresh(db_item)
+    return db_item
 
 
 @router.delete("/{item_id}", summary="아이템 삭제")
-def delete_item(item_id: int):
-    if item_id not in items:
+def delete_item(item_id: int, session: Session = Depends(get_session)):
+    db_item = session.get(Item, item_id)
+    if not db_item:
         raise HTTPException(status_code=404, detail="아이템을 찾을 수 없습니다")
-    deleted = items.pop(item_id)
-    return {"message": "삭제 완료", "deleted_item": deleted}
+    session.delete(db_item)
+    session.commit()
+    return {"message": "삭제 완료", "deleted_item": db_item}
